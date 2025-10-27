@@ -1,0 +1,9 @@
+
+docker-compose.yml
+
+data/
+
+*/target
+*/dist
+*/result
+/.direnv/
