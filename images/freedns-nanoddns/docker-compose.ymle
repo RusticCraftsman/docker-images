@@ -1,0 +1,12 @@
+services:
+  ddns:
+    build: .
+    container_name: freedns-nanoddns
+    restart: unless-stopped
+    environment:
+      # Your FreeDNS update hash from https://freedns.afraid.org/dynamic/
+      FREEDNS_HASH: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+      # Update interval in second
+      INTERVAL: "300"
+    volumes:
+      - ./data:/data
