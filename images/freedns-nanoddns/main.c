@@ -22,8 +22,16 @@ void log_msg(const char *msg) {
 }
 
 int update(const char *hash) {
-    struct hostent *he = gethostbyname(HOST);
-    if (!he) return -1;
+    static struct in_addr cached_addr;
+    static int addr_cached = 0;
+
+    if (!addr_cached) {
+        struct hostent *he = gethostbyname(HOST);
+        if (!he) return -1;
+        memcpy(&cached_addr, he->h_addr_list[0], sizeof(cached_addr));
+        addr_cached = 1;
+    }
+    
     
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) return -1;
@@ -31,7 +39,7 @@ int update(const char *hash) {
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(80);
-    memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
+    memcpy(&addr.sin_addr, &cached_addr, sizeof(cached_addr));
     
     if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         close(sock);
