@@ -1,7 +1,8 @@
 services:
-  ddns:
+  freedns-nanoddns:
     build: .
     container_name: freedns-nanoddns
+    image: freedns-nanoddns:latest
     restart: unless-stopped
     environment:
       # Your FreeDNS update hash from https://freedns.afraid.org/dynamic/
