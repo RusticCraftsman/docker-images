@@ -1,0 +1,13 @@
+services:
+  freedns-microddns:
+    build: .
+    container_name: freedns-microddns
+    image: freedns-microddns:latest
+    restart: unless-stopped
+    environment:
+      # Your FreeDNS update hash from https://freedns.afraid.org/dynamic/
+      FREEDNS_HASH: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+      # Update interval in second
+      INTERVAL: "300"
+    volumes:
+      - ./data:/data
