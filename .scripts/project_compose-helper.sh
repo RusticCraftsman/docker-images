@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+
 usage() {
   echo "Usage: $0 <parent_directory>"
   echo "This script recursively finds all 'docker-compose.ymle' files in the given directory,"
@@ -7,6 +14,7 @@ usage() {
   echo "this is useful to convert example files into usable environment ones, i save you the cp commands, you're welcome."
   exit 1
 }
+
 
 PARENT_DIRECTORY=$1
 
@@ -42,4 +50,4 @@ find "$PARENT_DIRECTORY" -type f -name "docker-compose.ymle" -print0 | while IFS
 
 done
 
-printf "\nWe are done here, have fun."
+echo -e "\n ${YELLOW} We are done here, have fun.\n"
