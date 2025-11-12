@@ -1,21 +1,22 @@
 name: Build and Push Docker Images
 
 permissions:
-  contents: write  # Needed to create Git tags
+  contents: write  # Needed to update version tracking file
+  pull-requests: write  # Needed to comment on PRs
 
 on:
-  # Trigger on any push (for testing in feature branches)
-  push:
-    paths:
-      - 'images/**'
+  # # Trigger on any push (for testing in feature branches)
+  # push:
+  #   paths:
+  #     - 'images/**'
   
-  # Trigger when PR is merged to main
-  pull_request:
-    types: [closed]
-    branches:
-      - main
-    paths:
-      - 'images/**'
+  # # Trigger when PR is merged to main
+  # pull_request:
+  #   types: [closed]
+  #   branches:
+  #     - main
+  #   paths:
+  #     - 'images/**'
   
   workflow_dispatch:
     inputs:
@@ -26,7 +27,7 @@ on:
 
 jobs:
   detect-changes:
-    runs-on: ubuntu-latest  # Keep ubuntu for checkout action compatibility
+    runs-on: ubuntu-latest
     outputs:
       changed_images: ${{ steps.changed.outputs.images }}
       has_changes: ${{ steps.changed.outputs.has_changes }}
@@ -76,7 +77,7 @@ jobs:
   build-and-push:
     needs: detect-changes
     if: needs.detect-changes.outputs.has_changes == 'true'
-    runs-on: ubuntu-latest  # Keep ubuntu for Docker actions
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         image: ${{ fromJSON(needs.detect-changes.outputs.changed_images) }}
@@ -98,29 +99,27 @@ jobs:
             echo "⚠️ No Dockerfile found in images/${{ matrix.image }}"
           fi
       
-      - name: Calculate next version
+      - name: Load version tracking
         if: steps.check.outputs.exists == 'true' && needs.detect-changes.outputs.should_push == 'true'
         id: version
         run: |
-          # Fetch all tags
-          git fetch --tags
+          # Create versions directory if it doesn't exist
+          mkdir -p .github/versions
           
-          # Get the latest version tag for this specific image
-          LATEST_TAG=$(git tag -l "${{ matrix.image }}-*" | sort -V | tail -n 1)
+          VERSION_FILE=".github/versions/${{ matrix.image }}.txt"
           
-          if [ -z "$LATEST_TAG" ]; then
-            # No previous version, start at 0.01
-            NEW_VERSION="0.01"
-          else
-            # Extract version number and increment by 0.01
-            CURRENT_VERSION=$(echo "$LATEST_TAG" | sed 's/${{ matrix.image }}-//')
+          if [ -f "$VERSION_FILE" ]; then
+            CURRENT_VERSION=$(cat "$VERSION_FILE")
             NEW_VERSION=$(echo "$CURRENT_VERSION + 0.01" | bc -l | xargs printf "%.2f")
+          else
+            NEW_VERSION="0.01"
           fi
           
-          echo "Current version: ${CURRENT_VERSION:-none}"
           echo "New version: $NEW_VERSION"
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "tag=${{ matrix.image }}-$NEW_VERSION" >> $GITHUB_OUTPUT
+          
+          # Save new version
+          echo "$NEW_VERSION" > "$VERSION_FILE"
       
       - name: Set up Docker Buildx
         if: steps.check.outputs.exists == 'true'
@@ -141,26 +140,51 @@ jobs:
           push: ${{ needs.detect-changes.outputs.should_push == 'true' }}
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}:${{ steps.version.outputs.version }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}:${{ steps.version.outputs.version || 'dev' }}
           build-args: |
             VERSION=${{ steps.version.outputs.version || 'dev' }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
             COMMIT_SHA=${{ github.sha }}
           labels: |
             org.opencontainers.image.version=${{ steps.version.outputs.version || 'dev' }}
-            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.created=${{ github.event.repository.updated_at }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=${{ github.repositoryUrl }}
-          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}:buildcache
-          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}:buildcache,mode=max
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       
-      - name: Create Git tag
+      - name: Sync README to DockerHub
+        if: steps.check.outputs.exists == 'true' && needs.detect-changes.outputs.should_push == 'true'
+        run: |
+          README_FILE="images/${{ matrix.image }}/README.md"
+          
+          if [ -f "$README_FILE" ]; then
+            # Escape content for JSON
+            README_CONTENT=$(jq -Rs . < "$README_FILE")
+            
+            # Update DockerHub description
+            curl -X PATCH \
+              "https://hub.docker.com/v2/repositories/${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}/" \
+              -H "Authorization: Bearer $(curl -s -X POST https://hub.docker.com/v2/users/login/ \
+                -H "Content-Type: application/json" \
+                -d '{"username": "${{ secrets.DOCKERHUB_USERNAME }}", "password": "${{ secrets.DOCKERHUB_TOKEN }}"}' \
+                | jq -r .token)" \
+              -H "Content-Type: application/json" \
+              -d "{\"full_description\": $README_CONTENT}"
+            
+            echo "✅ README synced to DockerHub"
+          else
+            echo "⚠️ No README.md found in images/${{ matrix.image }}/"
+          fi
+      
+      - name: Commit version file
         if: steps.check.outputs.exists == 'true' && needs.detect-changes.outputs.should_push == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ matrix.image }} version ${{ steps.version.outputs.version }}"
-          git push origin "${{ steps.version.outputs.tag }}"
+          git add .github/versions/${{ matrix.image }}.txt
+          git diff --staged --quiet || git commit -m "chore: bump ${{ matrix.image }} to v${{ steps.version.outputs.version }}"
+          git push
       
       - name: Summary
         if: steps.check.outputs.exists == 'true'
@@ -169,7 +193,7 @@ jobs:
           if [ "${{ needs.detect-changes.outputs.should_push }}" == "true" ]; then
             echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Tags:** latest, ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-            echo "- **Docker Hub:** \`${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Docker Hub:** https://hub.docker.com/r/${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Pushed:** ✅ Yes" >> $GITHUB_STEP_SUMMARY
           else
             echo "- **Built:** ✅ Yes (test build only)" >> $GITHUB_STEP_SUMMARY
