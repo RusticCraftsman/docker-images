@@ -7,3 +7,5 @@ data/
 */dist
 */result
 /.direnv/
+
+.secrets
