@@ -171,28 +171,51 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       
-      - name: Sync README to DockerHub
+      - name: Sync README and logo to DockerHub
         if: steps.check.outputs.exists == 'true' && needs.detect-changes.outputs.should_push == 'true'
         run: |
-          README_FILE="images/${{ matrix.image }}/README.md"
+          # Get DockerHub token
+          TOKEN=$(curl -s -X POST https://hub.docker.com/v2/users/login/ \
+            -H "Content-Type: application/json" \
+            -d '{"username": "${{ secrets.DOCKERHUB_USERNAME }}", "password": "${{ secrets.DOCKERHUB_TOKEN }}"}' \
+            | jq -r .token)
           
+          if [ -z "$TOKEN" ] || [ "$TOKEN" == "null" ]; then
+            echo "❌ Failed to get DockerHub token"
+            exit 1
+          fi
+          
+          # Update README if exists
+          README_FILE="images/${{ matrix.image }}/README.md"
           if [ -f "$README_FILE" ]; then
-            # Escape content for JSON
             README_CONTENT=$(jq -Rs . < "$README_FILE")
             
-            # Update DockerHub description
             curl -X PATCH \
               "https://hub.docker.com/v2/repositories/${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}/" \
-              -H "Authorization: Bearer $(curl -s -X POST https://hub.docker.com/v2/users/login/ \
-                -H "Content-Type: application/json" \
-                -d '{"username": "${{ secrets.DOCKERHUB_USERNAME }}", "password": "${{ secrets.DOCKERHUB_TOKEN }}"}' \
-                | jq -r .token)" \
+              -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/json" \
               -d "{\"full_description\": $README_CONTENT}"
             
             echo "✅ README synced to DockerHub"
           else
-            echo "⚠️ No README.md found in images/${{ matrix.image }}/"
+            echo "ℹ️ No README.md found in images/${{ matrix.image }}/"
+          fi
+          
+          # Upload logo if exists (looks for logo.png )
+          LOGO_FILE=""
+          if [ -f "images/${{ matrix.image }}/logo.png" ]; then
+            LOGO_FILE="images/${{ matrix.image }}/logo.png"
+          
+          if [ -n "$LOGO_FILE" ]; then
+            # Upload image to DockerHub
+            curl -X POST \
+              "https://hub.docker.com/v2/repositories/${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}/logo/" \
+              -H "Authorization: Bearer $TOKEN" \
+              -F "logo=@$LOGO_FILE"
+            
+            echo "✅ Logo synced to DockerHub from $LOGO_FILE"
+          else
+            echo "ℹ️ No logo.png or icon.png found in images/${{ matrix.image }}/"
           fi
       
       - name: Commit version file
@@ -249,4 +272,3 @@ jobs:
             echo "- **Built:** ✅ Yes (test build only)" >> $GITHUB_STEP_SUMMARY
             echo "- **Pushed:** ❌ No (not on main branch)" >> $GITHUB_STEP_SUMMARY
           fi
-
