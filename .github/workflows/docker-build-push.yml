@@ -5,18 +5,18 @@ permissions:
   pull-requests: write  # Needed to comment on PRs
 
 on:
-  # # Trigger on any push (for testing in feature branches)
-  # push:
-  #   paths:
-  #     - 'images/**'
+  # Trigger on any push (for testing in feature branches)
+  push:
+    paths:
+      - 'images/**'
   
-  # # Trigger when PR is merged to main
-  # pull_request:
-  #   types: [closed]
-  #   branches:
-  #     - main
-  #   paths:
-  #     - 'images/**'
+  # Trigger when PR is merged to main
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+    paths:
+      - 'images/**'
   
   workflow_dispatch:
     inputs:
@@ -58,8 +58,25 @@ jobs:
             else
               CHANGED_DIRS=$(find images -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | jq -R -s -c 'split("\n")[:-1]')
             fi
+          elif [ "${{ github.event_name }}" == "pull_request" ]; then
+            # For PR events, compare base and head
+            CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...${{ github.sha }} | grep '^images/' || true)
+            
+            if [ -z "$CHANGED_FILES" ]; then
+              echo "No changes in images directory"
+              echo "has_changes=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            
+            CHANGED_DIRS=$(echo "$CHANGED_FILES" | cut -d'/' -f2 | sort -u | jq -R -s -c 'split("\n")[:-1]')
           else
-            CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep '^images/' || true)
+            # For push events
+            if [ "${{ github.event.before }}" == "0000000000000000000000000000000000000000" ]; then
+              # First push to branch - compare with HEAD~1
+              CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep '^images/' || true)
+            else
+              CHANGED_FILES=$(git diff --name-only ${{ github.event.before }}..${{ github.sha }} | grep '^images/' || true)
+            fi
             
             if [ -z "$CHANGED_FILES" ]; then
               echo "No changes in images directory"
@@ -82,6 +99,7 @@ jobs:
       matrix:
         image: ${{ fromJSON(needs.detect-changes.outputs.changed_images) }}
       fail-fast: false
+      max-parallel: 1  # Build images sequentially to avoid git conflicts
     
     steps:
       - name: Checkout code
@@ -182,9 +200,41 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Check if version file actually changed
+          if [ ! -f ".github/versions/${{ matrix.image }}.txt" ]; then
+            echo "⚠️ Version file doesn't exist, skipping commit"
+            exit 0
+          fi
+          
           git add .github/versions/${{ matrix.image }}.txt
-          git diff --staged --quiet || git commit -m "chore: bump ${{ matrix.image }} to v${{ steps.version.outputs.version }}"
-          git push
+          
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "ℹ️ No version changes to commit for ${{ matrix.image }}"
+            exit 0
+          fi
+          
+          git commit -m "chore: bump ${{ matrix.image }} to v${{ steps.version.outputs.version }}"
+          
+          # Pull latest changes and retry push if needed
+          MAX_RETRIES=3
+          for i in $(seq 1 $MAX_RETRIES); do
+            if git push; then
+              echo "✅ Version file pushed successfully"
+              break
+            else
+              echo "⚠️ Push failed, pulling and retrying... (attempt $i/$MAX_RETRIES)"
+              git pull --rebase origin ${{ github.ref_name }} || {
+                echo "⚠️ Rebase failed, trying merge strategy"
+                git pull --no-rebase origin ${{ github.ref_name }}
+              }
+              if [ $i -eq $MAX_RETRIES ]; then
+                echo "❌ Failed to push after $MAX_RETRIES attempts"
+                exit 1
+              fi
+            fi
+          done
       
       - name: Summary
         if: steps.check.outputs.exists == 'true'
@@ -199,3 +249,4 @@ jobs:
             echo "- **Built:** ✅ Yes (test build only)" >> $GITHUB_STEP_SUMMARY
             echo "- **Pushed:** ❌ No (not on main branch)" >> $GITHUB_STEP_SUMMARY
           fi
+
