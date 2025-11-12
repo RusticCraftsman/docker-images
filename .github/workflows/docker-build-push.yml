@@ -205,6 +205,7 @@ jobs:
           LOGO_FILE=""
           if [ -f "images/${{ matrix.image }}/logo.png" ]; then
             LOGO_FILE="images/${{ matrix.image }}/logo.png"
+          fi
           
           if [ -n "$LOGO_FILE" ]; then
             # Upload image to DockerHub
